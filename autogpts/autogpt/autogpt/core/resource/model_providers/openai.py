@@ -13,11 +13,7 @@ import yaml
 from openai.error import APIError, RateLimitError
 from pydantic import SecretStr
 
-from autogpt.core.configuration import (
-    Configurable,
-    SystemConfiguration,
-    UserConfigurable,
-)
+from autogpt.core.configuration import Configurable, UserConfigurable
 from autogpt.core.resource.model_providers.schema import (
     AssistantChatMessageDict,
     AssistantToolCallDict,
@@ -31,6 +27,7 @@ from autogpt.core.resource.model_providers.schema import (
     EmbeddingModelProvider,
     EmbeddingModelResponse,
     ModelProviderBudget,
+    ModelProviderConfiguration,
     ModelProviderCredentials,
     ModelProviderName,
     ModelProviderService,
@@ -167,8 +164,9 @@ OPEN_AI_MODELS = {
 }
 
 
-class OpenAIConfiguration(SystemConfiguration):
-    retries_per_request: int = UserConfigurable()
+class OpenAIConfiguration(ModelProviderConfiguration):
+    fix_failed_parse_tries: int = UserConfigurable(3)
+    pass
 
 
 class OpenAICredentials(ModelProviderCredentials):
@@ -268,6 +266,8 @@ class OpenAIProvider(
         ),
     )
 
+    _configuration: OpenAIConfiguration
+
     def __init__(
         self,
         settings: OpenAISettings,
@@ -364,24 +364,45 @@ class OpenAIProvider(
             model_prompt += completion_kwargs["messages"]
             del completion_kwargs["messages"]
 
-        response = await self._create_chat_completion(
-            messages=model_prompt,
-            **completion_kwargs,
-        )
-        response_args = {
-            "model_info": OPEN_AI_CHAT_MODELS[model_name],
-            "prompt_tokens_used": response.usage.prompt_tokens,
-            "completion_tokens_used": response.usage.completion_tokens,
-        }
-
-        response_message = response.choices[0].message.to_dict_recursive()
-        if tool_calls_compat_mode:
-            response_message["tool_calls"] = _tool_calls_compat_extract_calls(
-                response_message["content"]
+        attempts = 0
+        while True:
+            response = await self._create_chat_completion(
+                messages=model_prompt,
+                **completion_kwargs,
             )
+            response_args = {
+                "model_info": OPEN_AI_CHAT_MODELS[model_name],
+                "prompt_tokens_used": response.usage.prompt_tokens,
+                "completion_tokens_used": response.usage.completion_tokens,
+            }
+
+            response_message = response.choices[0].message.to_dict_recursive()
+            if tool_calls_compat_mode:
+                response_message["tool_calls"] = _tool_calls_compat_extract_calls(
+                    response_message["content"]
+                )
+
+            # If parsing the response fails, append the error to the prompt, and let the
+            # LLM fix its mistake(s).
+            try:
+                attempts += 1
+                parsed_response = completion_parser(response_message)
+                break
+            except Exception as e:
+                self._logger.warning(f"Parsing attempt #{attempts} failed: {e}")
+                self._logger.debug(
+                    f"Parsing failed on response: '''{response_message}'''"
+                )
+                if attempts < self._configuration.fix_failed_parse_tries:
+                    model_prompt.append(
+                        ChatMessage.system(f"ERROR PARSING YOUR RESPONSE:\n\n{e}")
+                    )
+                else:
+                    raise
+
         response = ChatModelResponse(
             response=response_message,
-            parsed_result=completion_parser(response_message),
+            parsed_result=parsed_response,
             **response_args,
         )
         self._budget.update_usage_and_cost(response)
@@ -447,6 +468,12 @@ class OpenAIProvider(
                 # Provide compatibility with older models
                 _functions_compat_fix_kwargs(functions, completion_kwargs)
 
+        if extra_headers := self._configuration.extra_request_headers:
+            if completion_kwargs.get("headers"):
+                completion_kwargs["headers"].update(extra_headers)
+            else:
+                completion_kwargs["headers"] = extra_headers.copy()
+
         return completion_kwargs
 
     def _get_embedding_kwargs(
@@ -469,6 +496,12 @@ class OpenAIProvider(
             **kwargs,
             **self._credentials.unmasked(),
         }
+
+        if extra_headers := self._configuration.extra_request_headers:
+            if embedding_kwargs.get("headers"):
+                embedding_kwargs["headers"].update(extra_headers)
+            else:
+                embedding_kwargs["headers"] = extra_headers.copy()
 
         return embedding_kwargs
 

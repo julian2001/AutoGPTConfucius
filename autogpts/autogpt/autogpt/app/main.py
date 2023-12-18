@@ -125,6 +125,21 @@ async def run_auto_gpt(
         print_motd(config, logger)
         print_git_branch_info(logger)
         print_python_version_info(logger)
+        print_attribute("Smart LLM", config.smart_llm)
+        print_attribute("Fast LLM", config.fast_llm)
+        print_attribute("Browser", config.selenium_web_browser)
+        if config.continuous_mode:
+            print_attribute("Continuous Mode", "ENABLED", title_color=Fore.YELLOW)
+            if continuous_limit:
+                print_attribute("Continuous Limit", config.continuous_limit)
+        if config.tts_config.speak_mode:
+            print_attribute("Speak Mode", "ENABLED")
+        if ai_settings:
+            print_attribute("Using AI Settings File", ai_settings)
+        if prompt_settings:
+            print_attribute("Using Prompt Settings File", prompt_settings)
+        if config.allow_downloads:
+            print_attribute("Native Downloading", "ENABLED")
 
     if install_plugin_deps:
         install_plugin_dependencies()
@@ -346,7 +361,10 @@ async def run_auto_gpt_server(
     config.plugins = scan_plugins(config)
 
     # Set up & start server
-    database = AgentDB(os.getenv("AP_SERVER_DB_URL", "sqlite:///data/ap_server.db"))
+    database = AgentDB(
+        database_string=os.getenv("AP_SERVER_DB_URL", "sqlite:///data/ap_server.db"),
+        debug_enabled=debug,
+    )
     server = AgentProtocolServer(
         app_config=config, database=database, llm_provider=llm_provider
     )
