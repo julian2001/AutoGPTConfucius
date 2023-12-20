@@ -1,0 +1,19 @@
+source 'https://github.com/CocoaPods/Specs.git'
+use_frameworks!
+
+platform :ios, '17.0'
+
+target 'AutoGPTConfucius_Example' do
+  pod 'AutoGPTConfucius', :path => '../'
+	pod 'SDWebImage'
+  pod 'Codable'
+  pod 'TensorFlowLiteSwift'
+  pod 'TensorFlowLiteObjC'
+  pod 'Amplify'
+  pod 'AmplifyPlugins/AWSAPIPlugin'
+  pod 'AmplifyPlugins/AWSCognitoAuthPlugin'
+  pod 'AWSAPIPlugin'
+  pod 'Autogpt'
+  pod 'docker'
+
+end
